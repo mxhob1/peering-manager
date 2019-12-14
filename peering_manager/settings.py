@@ -206,6 +206,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "cacheops",
     "debug_toolbar",
     "django_filters",
     "django_tables2",
