@@ -261,7 +261,9 @@ class AutonomousSystemInternetExchangesPeeringSessions(ModelListView):
         # which we want to get the peering sessions.
         if "asn" in kwargs:
             autonomous_system = get_object_or_404(AutonomousSystem, asn=kwargs["asn"])
-            queryset = autonomous_system.internetexchangepeeringsession_set.order_by(
+            queryset = autonomous_system.internetexchangepeeringsession_set.prefetch_related(
+                "internet_exchange"
+            ).order_by(
                 "internet_exchange", "ip_address"
             )
 
@@ -344,9 +346,9 @@ class BGPGroupPeeringSessions(ModelListView):
         queryset = None
         if "slug" in kwargs:
             bgp_group = get_object_or_404(BGPGroup, slug=kwargs["slug"])
-            queryset = bgp_group.directpeeringsession_set.order_by(
-                "autonomous_system", "ip_address"
-            )
+            queryset = bgp_group.directpeeringsession_set.prefetch_related(
+                "autonomous_system", "router"
+            ).order_by("autonomous_system", "ip_address")
         return queryset
 
     def extra_context(self, kwargs):
@@ -530,7 +532,7 @@ class DirectPeeringSessionList(ModelListView):
 
 
 class InternetExchangeList(ModelListView):
-    queryset = InternetExchange.objects.order_by("name")
+    queryset = InternetExchange.objects.prefetch_related("router").order_by("name")
     table = InternetExchangeTable
     filter = InternetExchangeFilter
     filter_form = InternetExchangeFilterForm
@@ -649,7 +651,9 @@ class InternetExchangePeeringSessions(ModelListView):
         # which we want to get the peering sessions.
         if "slug" in kwargs:
             internet_exchange = get_object_or_404(InternetExchange, slug=kwargs["slug"])
-            queryset = internet_exchange.internetexchangepeeringsession_set.order_by(
+            queryset = internet_exchange.internetexchangepeeringsession_set.prefetch_related(
+                "autonomous_system"
+            ).order_by(
                 "autonomous_system", "ip_address"
             )
 
@@ -865,7 +869,7 @@ class InternetExchangePeeringSessionEnable(PermissionRequiredMixin, View):
 
 
 class RouterList(ModelListView):
-    queryset = Router.objects.all()
+    queryset = Router.objects.prefetch_related("configuration_template").all()
     filter = RouterFilter
     filter_form = RouterFilterForm
     table = RouterTable
