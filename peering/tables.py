@@ -1,5 +1,7 @@
 import django_tables2 as tables
 
+from django.utils.safestring import mark_safe
+
 from .models import (
     AutonomousSystem,
     BGPGroup,
@@ -12,7 +14,13 @@ from .models import (
     RoutingPolicy,
 )
 from peering_manager import settings
-from utils.tables import ActionsColumn, BaseTable, SelectColumn
+from utils.tables import (
+    ActionsColumn,
+    BaseTable,
+    BooleanColumn,
+    SelectColumn,
+    TagColumn,
+)
 
 
 AUTONOMOUS_SYSTEM_ACTIONS = """
@@ -30,20 +38,6 @@ AUTONOMOUS_SYSTEM_HAS_POTENTIAL_IX_PEERING_SESSIONS = """
 BGP_GROUP_ACTIONS = """
 {% if perms.peering.change_bgpgroup %}
 <a href="{% url 'peering:bgpgroup_edit' slug=record.slug %}" class="btn btn-xs btn-warning"><i class="fas fa-edit"></i></a>
-{% endif %}
-"""
-BGP_GROUP_POLL_SESSION_STATES = """
-{% if record.check_bgp_session_states %}
-<i class="fas fa-check text-success"></i>
-{% else %}
-<i class="fas fa-times text-danger"></i>
-{% endif %}
-"""
-BGPSESSION_STATUS = """
-{% if record.enabled %}
-<i class="fas fa-check text-success"></i>
-{% else %}
-<i class="fas fa-times text-danger"></i>
 {% endif %}
 """
 BGP_RELATIONSHIP = "{{ record.get_relationship_html }}"
@@ -90,23 +84,9 @@ INTERNET_EXCHANGE_PEERING_SESSION_ACTIONS = """
 <a href="{% url 'peering:internetexchangepeeringsession_edit' pk=record.pk %}" class="btn btn-xs btn-warning"><i class="fas fa-edit"></i></a>
 {% endif %}
 """
-INTERNET_EXCHANGE_PEERING_SESSION_IS_ROUTE_SERVER = """
-{% if record.is_route_server %}
-<i class="fas fa-check text-success"></i>
-{% else %}
-<i class="fas fa-times text-danger"></i>
-{% endif %}
-"""
 ROUTER_ACTIONS = """
 {% if perms.peering.change_router %}
 <a href="{% url 'peering:router_edit' pk=record.pk %}" class="btn btn-xs btn-warning"><i class="fas fa-edit"></i></a>
-{% endif %}
-"""
-ROUTER_ENCRYPT_PASSWORD = """
-{% if record.encrypt_passwords %}
-<i class="fas fa-check text-success"></i>
-{% else %}
-<i class="fas fa-times text-danger"></i>
 {% endif %}
 """
 ROUTING_POLICY_ACTIONS = """
@@ -120,9 +100,6 @@ ROUTING_POLICY_TYPE = "{{ record.get_type_html }}"
 class BGPSessionStateColumn(tables.TemplateColumn):
     def __init__(self, *args, **kwargs):
         default = kwargs.pop("default", "")
-        visible = kwargs.pop(
-            "visible", settings.NAPALM_USERNAME and settings.NAPALM_PASSWORD
-        )
         verbose_name = kwargs.pop("verbose_name", "State")
         template_code = kwargs.pop("template_code", "{{ record.get_bgp_state_html }}")
         super().__init__(
@@ -130,7 +107,17 @@ class BGPSessionStateColumn(tables.TemplateColumn):
             default=default,
             verbose_name=verbose_name,
             template_code=template_code,
-            visible=visible,
+            **kwargs
+        )
+
+
+class RoutingPolicyColumn(tables.ManyToManyColumn):
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            *args,
+            default=mark_safe('<span class="text-muted">&mdash;</span>'),
+            separator=" ",
+            transform=lambda p: p.get_type_html(display_name=True),
             **kwargs
         )
 
@@ -146,11 +133,22 @@ class AutonomousSystemTable(BaseTable):
     irr_as_set = tables.Column(verbose_name="IRR AS-SET", orderable=False)
     ipv6_max_prefixes = tables.Column(verbose_name="IPv6 Max Prefixes")
     ipv4_max_prefixes = tables.Column(verbose_name="IPv4 Max Prefixes")
+    import_routing_policies = RoutingPolicyColumn(verbose_name="Import Policies")
+    export_routing_policies = RoutingPolicyColumn(verbose_name="Export Policies")
+    directpeeringsession_count = tables.Column(
+        verbose_name="Direct Sessions",
+        attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
+    )
+    internetexchangepeeringsession_count = tables.Column(
+        verbose_name="IX Sessions",
+        attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
+    )
     has_potential_ix_peering_sessions = tables.TemplateColumn(
         verbose_name="",
         orderable=False,
         template_code=AUTONOMOUS_SYSTEM_HAS_POTENTIAL_IX_PEERING_SESSIONS,
     )
+    tags = TagColumn(url_name="peering:autonomoussystem_list")
     actions = ActionsColumn(template_code=AUTONOMOUS_SYSTEM_ACTIONS)
 
     class Meta(BaseTable.Meta):
@@ -162,6 +160,22 @@ class AutonomousSystemTable(BaseTable):
             "irr_as_set",
             "ipv6_max_prefixes",
             "ipv4_max_prefixes",
+            "import_routing_policies",
+            "export_routing_policies",
+            "directpeeringsession_count",
+            "internetexchangepeeringsession_count",
+            "has_potential_ix_peering_sessions",
+            "tags",
+            "actions",
+        )
+        default_columns = (
+            "pk",
+            "asn",
+            "name",
+            "irr_as_set",
+            "directpeeringsession_count",
+            "internetexchangepeeringsession_count",
+            "has_potential_ix_peering_sessions",
             "actions",
         )
 
@@ -173,20 +187,33 @@ class BGPGroupTable(BaseTable):
 
     pk = SelectColumn()
     name = tables.Column(linkify=True)
-    check_bgp_session_states = tables.TemplateColumn(
+    check_bgp_session_states = BooleanColumn(
         verbose_name="Poll Session States",
-        template_code=BGP_GROUP_POLL_SESSION_STATES,
         attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
     )
+    import_routing_policies = RoutingPolicyColumn(verbose_name="Import Policies")
+    export_routing_policies = RoutingPolicyColumn(verbose_name="Export Policies")
     directpeeringsession_count = tables.Column(
-        verbose_name="Direct Peering Sessions",
+        verbose_name="Direct Sessions",
         attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
     )
+    tags = TagColumn(url_name="peering:bgpgroup_list")
     actions = ActionsColumn(template_code=BGP_GROUP_ACTIONS)
 
     class Meta(BaseTable.Meta):
         model = BGPGroup
         fields = (
+            "pk",
+            "name",
+            "slug",
+            "check_bgp_session_states",
+            "import_routing_policies",
+            "export_routing_policies",
+            "directpeeringsession_count",
+            "tags",
+            "actions",
+        )
+        default_columns = (
             "pk",
             "name",
             "check_bgp_session_states",
@@ -203,11 +230,13 @@ class CommunityTable(BaseTable):
     pk = SelectColumn()
     name = tables.Column(linkify=True)
     type = tables.TemplateColumn(template_code=COMMUNITY_TYPE)
+    tags = TagColumn(url_name="peering:community_list")
     actions = ActionsColumn(template_code=COMMUNITY_ACTIONS)
 
     class Meta(BaseTable.Meta):
         model = Community
-        fields = ("pk", "name", "value", "type", "actions")
+        fields = ("pk", "name", "value", "type", "tags", "actions")
+        default_columns = ("pk", "name", "value", "type", "actions")
 
 
 class DirectPeeringSessionTable(BaseTable):
@@ -224,13 +253,15 @@ class DirectPeeringSessionTable(BaseTable):
     relationship = tables.TemplateColumn(
         verbose_name="Relationship", template_code=BGP_RELATIONSHIP
     )
-    enabled = tables.TemplateColumn(
+    enabled = BooleanColumn(
         verbose_name="Status",
-        template_code=BGPSESSION_STATUS,
         attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
     )
-    session_state = BGPSessionStateColumn(accessor="bgp_state")
+    import_routing_policies = RoutingPolicyColumn(verbose_name="Import Policies")
+    export_routing_policies = RoutingPolicyColumn(verbose_name="Export Policies")
+    state = BGPSessionStateColumn(accessor="bgp_state")
     router = tables.Column(verbose_name="Router", accessor="router", linkify=True)
+    tags = TagColumn(url_name="peering:directpeeringsession_list")
     actions = ActionsColumn(template_code=DIRECT_PEERING_SESSION_ACTIONS)
 
     class Meta(BaseTable.Meta):
@@ -242,7 +273,23 @@ class DirectPeeringSessionTable(BaseTable):
             "bgp_group",
             "relationship",
             "enabled",
-            "session_state",
+            "import_routing_policies",
+            "export_routing_policies",
+            "state",
+            "last_established_state",
+            "received_prefix_count",
+            "advertised_prefix_count",
+            "router",
+            "tags",
+            "actions",
+        )
+        default_columns = (
+            "pk",
+            "autonomous_system",
+            "ip_address",
+            "bgp_group",
+            "relationship",
+            "enabled",
             "router",
             "actions",
         )
@@ -258,11 +305,46 @@ class InternetExchangeTable(BaseTable):
     ipv6_address = tables.Column(verbose_name="IPv6 Address")
     ipv4_address = tables.Column(verbose_name="IPv4 Address")
     router = tables.Column(verbose_name="Router", accessor="router", linkify=True)
+    check_bgp_session_states = BooleanColumn(
+        verbose_name="Check Sessions",
+        attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
+    )
+    bgp_session_states_update = tables.Column(verbose_name="Last Sessions Check")
+    import_routing_policies = RoutingPolicyColumn(verbose_name="Import Policies")
+    export_routing_policies = RoutingPolicyColumn(verbose_name="Export Policies")
+    internetexchangepeeringsession_count = tables.Column(
+        verbose_name="Sessions",
+        attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
+    )
+    tags = TagColumn(url_name="peering:internetexchange_list")
     actions = ActionsColumn(template_code=INTERNET_EXCHANGE_ACTIONS)
 
     class Meta(BaseTable.Meta):
         model = InternetExchange
-        fields = ("pk", "name", "ipv6_address", "ipv4_address", "router", "actions")
+        fields = (
+            "pk",
+            "name",
+            "slug",
+            "ipv6_address",
+            "ipv4_address",
+            "import_routing_policies",
+            "export_routing_policies",
+            "router",
+            "check_bgp_session_states",
+            "bgp_session_states_update",
+            "internetexchangepeeringsession_count",
+            "tags",
+            "actions",
+        )
+        default_columns = (
+            "pk",
+            "name",
+            "ipv6_address",
+            "ipv4_address",
+            "router",
+            "internetexchangepeeringsession_count",
+            "actions",
+        )
 
 
 class InternetExchangePeeringSessionTable(BaseTable):
@@ -278,17 +360,18 @@ class InternetExchangePeeringSessionTable(BaseTable):
         verbose_name="IX", accessor="internet_exchange", linkify=True
     )
     ip_address = tables.Column(verbose_name="IP Address", linkify=True)
-    is_route_server = tables.TemplateColumn(
+    is_route_server = BooleanColumn(
         verbose_name="Route Server",
-        template_code=INTERNET_EXCHANGE_PEERING_SESSION_IS_ROUTE_SERVER,
         attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
     )
-    enabled = tables.TemplateColumn(
+    enabled = BooleanColumn(
         verbose_name="Enabled",
-        template_code=BGPSESSION_STATUS,
         attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
     )
-    session_state = BGPSessionStateColumn(accessor="bgp_state")
+    import_routing_policies = RoutingPolicyColumn(verbose_name="Import Policies")
+    export_routing_policies = RoutingPolicyColumn(verbose_name="Export Policies")
+    state = BGPSessionStateColumn(accessor="bgp_state")
+    tags = TagColumn(url_name="peering:internetexchangepeeringsession_list")
     actions = ActionsColumn(template_code=INTERNET_EXCHANGE_PEERING_SESSION_ACTIONS)
 
     class Meta(BaseTable.Meta):
@@ -300,7 +383,23 @@ class InternetExchangePeeringSessionTable(BaseTable):
             "ip_address",
             "is_route_server",
             "enabled",
-            "session_state",
+            "import_routing_policies",
+            "export_routing_policies",
+            "state",
+            "last_established_state",
+            "received_prefix_count",
+            "advertised_prefix_count",
+            "tags",
+            "actions",
+        )
+        default_columns = (
+            "pk",
+            "autonomous_system",
+            "internet_exchange",
+            "ip_address",
+            "is_route_server",
+            "enabled",
+            "enabled",
             "actions",
         )
 
@@ -312,12 +411,20 @@ class RouterTable(BaseTable):
 
     pk = SelectColumn()
     name = tables.Column(linkify=True)
-    encrypt_passwords = tables.TemplateColumn(
+    encrypt_passwords = BooleanColumn(
         verbose_name="Encrypt Password",
-        template_code=ROUTER_ENCRYPT_PASSWORD,
         attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
     )
     configuration_template = tables.Column(linkify=True, verbose_name="Configuration")
+    directpeeringsession_count = tables.Column(
+        verbose_name="Direct Sessions",
+        attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
+    )
+    internetexchangepeeringsession_count = tables.Column(
+        verbose_name="IX Sessions",
+        attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
+    )
+    tags = TagColumn(url_name="peering:router_list")
     actions = ActionsColumn(template_code=ROUTER_ACTIONS)
 
     class Meta(BaseTable.Meta):
@@ -329,6 +436,20 @@ class RouterTable(BaseTable):
             "platform",
             "encrypt_passwords",
             "configuration_template",
+            "directpeeringsession_count",
+            "internetexchangepeeringsession_count",
+            "tags",
+            "actions",
+        )
+        default_columns = (
+            "pk",
+            "name",
+            "hostname",
+            "platform",
+            "encrypt_passwords",
+            "configuration_template",
+            "directpeeringsession_count",
+            "internetexchangepeeringsession_count",
             "actions",
         )
 
@@ -341,11 +462,13 @@ class RoutingPolicyTable(BaseTable):
     pk = SelectColumn()
     name = tables.Column(linkify=True)
     type = tables.TemplateColumn(template_code=ROUTING_POLICY_TYPE)
+    tags = TagColumn(url_name="peering:routingpolicy_list")
     actions = ActionsColumn(template_code=ROUTING_POLICY_ACTIONS)
 
     class Meta(BaseTable.Meta):
         model = RoutingPolicy
-        fields = ("pk", "name", "type", "weight", "address_family", "actions")
+        fields = ("pk", "name", "type", "weight", "address_family", "tags", "actions")
+        default_columns = ("pk", "name", "type", "weight", "address_family", "actions")
 
 
 class TemplateTable(BaseTable):
@@ -355,8 +478,10 @@ class TemplateTable(BaseTable):
 
     pk = SelectColumn()
     name = tables.Column(linkify=True)
+    tags = TagColumn(url_name="peering:template_list")
     actions = ActionsColumn(template_code=CONFIGURATION_TEMPLATE_ACTIONS)
 
     class Meta(BaseTable.Meta):
         model = Template
-        fields = ("pk", "type", "name", "updated", "actions")
+        fields = ("pk", "name", "type", "updated", "tags", "actions")
+        default_columns = ("pk", "name", "type", "updated", "actions")

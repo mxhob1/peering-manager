@@ -131,8 +131,9 @@ pip-selfcheck.json
 
 ### Project specifics ###
 backup
-gunicorn_config.py
+gunicorn*.py
 static
 logs/*
 !logs/.gitkeep
 scripts/development/postgresql
+scripts/development/redis

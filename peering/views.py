@@ -76,7 +76,7 @@ from peeringdb.filters import PeerRecordFilterSet
 from peeringdb.forms import PeerRecordFilterForm
 from peeringdb.http import PeeringDB
 from peeringdb.models import PeerRecord
-from peeringdb.tables import ContactTable, PeerRecordTable
+from peeringdb.tables import ASPeerRecordTable, ContactTable, PeerRecordTable
 from utils.views import (
     AddOrEditView,
     BulkAddFromDependencyView,
@@ -90,7 +90,10 @@ from utils.views import (
 
 class ASList(PermissionRequiredMixin, ModelListView):
     permission_required = "peering.view_autonomoussystem"
-    queryset = AutonomousSystem.objects.order_by("asn")
+    queryset = AutonomousSystem.objects.annotate(
+        directpeeringsession_count=Count("directpeeringsession"),
+        internetexchangepeeringsession_count=Count("internetexchangepeeringsession"),
+    ).order_by("asn")
     filter = AutonomousSystemFilterSet
     filter_form = AutonomousSystemFilterForm
     table = AutonomousSystemTable
@@ -227,7 +230,6 @@ class AutonomousSystemDirectPeeringSessions(PermissionRequiredMixin, ModelListVi
     filter_form = DirectPeeringSessionFilterForm
     table = DirectPeeringSessionTable
     template = "peering/as/direct_peering_sessions.html"
-    hidden_columns = ["autonomous_system"]
 
     def build_queryset(self, request, kwargs):
         queryset = None
@@ -246,7 +248,9 @@ class AutonomousSystemDirectPeeringSessions(PermissionRequiredMixin, ModelListVi
         # for it
         if "asn" in kwargs:
             autonomous_system = get_object_or_404(AutonomousSystem, asn=kwargs["asn"])
-            extra_context.update({"autonomous_system": autonomous_system})
+            extra_context.update(
+                {"autonomous_system": autonomous_system, "asn": autonomous_system.asn}
+            )
         return extra_context
 
 
@@ -258,7 +262,6 @@ class AutonomousSystemInternetExchangesPeeringSessions(
     filter_form = InternetExchangePeeringSessionFilterForm
     table = InternetExchangePeeringSessionTable
     template = "peering/as/internet_exchange_peering_sessions.html"
-    hidden_columns = ["autonomous_system"]
     hidden_filters = ["autonomous_system__id"]
 
     def build_queryset(self, request, kwargs):
@@ -268,7 +271,9 @@ class AutonomousSystemInternetExchangesPeeringSessions(
         # which we want to get the peering sessions.
         if "asn" in kwargs:
             autonomous_system = get_object_or_404(AutonomousSystem, asn=kwargs["asn"])
-            queryset = autonomous_system.internetexchangepeeringsession_set.order_by(
+            queryset = autonomous_system.internetexchangepeeringsession_set.prefetch_related(
+                "internet_exchange"
+            ).order_by(
                 "internet_exchange", "ip_address"
             )
 
@@ -281,16 +286,87 @@ class AutonomousSystemInternetExchangesPeeringSessions(
         # for it
         if "asn" in kwargs:
             autonomous_system = get_object_or_404(AutonomousSystem, asn=kwargs["asn"])
-            extra_context.update({"autonomous_system": autonomous_system})
+            extra_context.update(
+                {"autonomous_system": autonomous_system, "asn": autonomous_system.asn}
+            )
 
         return extra_context
+
+
+class AutonomousSystemPeers(PermissionRequiredMixin, ModelListView):
+    permission_required = "peering.view_autonomoussystem"
+    table = ASPeerRecordTable
+    template = "peering/as/peers.html"
+
+    def build_queryset(self, request, kwargs):
+        # The queryset needs to be composed of PeerRecord objects but they are linked
+        # to an IX. So first of all we need to retrieve the IX on which we want to get
+        # the peering sessions.
+        if "asn" in kwargs:
+            autonomous_system = get_object_or_404(AutonomousSystem, asn=kwargs["asn"])
+            queryset = autonomous_system.get_available_sessions()
+
+        return queryset
+
+    def extra_context(self, kwargs):
+        extra_context = {}
+        # Since we are in the context of an AS we need to keep the reference
+        # for it
+        if "asn" in kwargs:
+            autonomous_system = get_object_or_404(AutonomousSystem, asn=kwargs["asn"])
+            extra_context.update({"autonomous_system": autonomous_system})
+        return extra_context
+
+
+class AutonomousSystemAddFromPeeringDB(
+    PermissionRequiredMixin, BulkAddFromDependencyView
+):
+    permission_required = "peering.add_internetexchangepeeringsession"
+    model = InternetExchangePeeringSession
+    dependency_model = PeerRecord
+    form_model = InternetExchangePeeringSessionForm
+    template = "peering/session/internet_exchange/add_from_peeringdb.html"
+
+    def process_dependency_object(self, request, dependency):
+        return_value = []
+
+        for ix in InternetExchangePeeringSession.get_ix_list_for_peer_record(
+            dependency
+        ):
+            (session6, created6) = InternetExchangePeeringSession.create_from_peeringdb(
+                dependency, 6, internet_exchange=ix
+            )
+            (session4, created4) = InternetExchangePeeringSession.create_from_peeringdb(
+                dependency, 4, internet_exchange=ix
+            )
+
+            if session6 and created6:
+                return_value.append(session6)
+            if session4 and created4:
+                return_value.append(session4)
+
+        return return_value
+
+    def sort_objects(self, object_list):
+        objects = []
+        for object_couple in object_list:
+            for obj in object_couple:
+                if obj:
+                    objects.append(
+                        {
+                            "autonomous_system": obj.autonomous_system,
+                            "internet_exchange": obj.internet_exchange,
+                            "ip_address": obj.ip_address,
+                        }
+                    )
+        return objects
 
 
 class BGPGroupList(PermissionRequiredMixin, ModelListView):
     permission_required = "peering.view_bgpgroup"
     queryset = BGPGroup.objects.annotate(
         directpeeringsession_count=Count("directpeeringsession")
-    ).order_by("name")
+    ).order_by("name", "slug")
     filter = BGPGroupFilterSet
     filter_form = BGPGroupFilterForm
     table = BGPGroupTable
@@ -348,16 +424,15 @@ class BGPGroupPeeringSessions(PermissionRequiredMixin, ModelListView):
     filter_form = DirectPeeringSessionFilterForm
     table = DirectPeeringSessionTable
     template = "peering/bgp-group/sessions.html"
-    hidden_columns = ["bgp_group"]
     hidden_filters = ["bgp_group"]
 
     def build_queryset(self, request, kwargs):
         queryset = None
         if "slug" in kwargs:
             bgp_group = get_object_or_404(BGPGroup, slug=kwargs["slug"])
-            queryset = bgp_group.directpeeringsession_set.order_by(
-                "autonomous_system", "ip_address"
-            )
+            queryset = bgp_group.directpeeringsession_set.prefetch_related(
+                "autonomous_system", "router"
+            ).order_by("autonomous_system", "ip_address")
         return queryset
 
     def extra_context(self, kwargs):
@@ -367,32 +442,6 @@ class BGPGroupPeeringSessions(PermissionRequiredMixin, ModelListView):
                 {"bgp_group": get_object_or_404(BGPGroup, slug=kwargs["slug"])}
             )
         return extra_context
-
-    def setup_table_columns(self, request, permissions, table, kwargs):
-        table.columns.show("session_state")
-        super().setup_table_columns(request, permissions, table, kwargs)
-
-
-class BGPGroupPeeringSessionAdd(PermissionRequiredMixin, AddOrEditView):
-    permission_required = "peering.add_directpeeringsession"
-    model = DirectPeeringSession
-    form = DirectPeeringSessionForm
-    template = "peering/session/direct/add_edit.html"
-
-    def get_object(self, kwargs):
-        if "pk" in kwargs:
-            return get_object_or_404(self.model, pk=kwargs["pk"])
-
-        return self.model()
-
-    def alter_object(self, obj, request, args, kwargs):
-        if "slug" in kwargs:
-            obj.bgp_group = get_object_or_404(BGPGroup, slug=kwargs["slug"])
-
-        return obj
-
-    def get_return_url(self, obj):
-        return obj.bgp_group.get_peering_sessions_list_url()
 
 
 class CommunityList(PermissionRequiredMixin, ModelListView):
@@ -455,23 +504,27 @@ class DirectPeeringSessionAdd(PermissionRequiredMixin, AddOrEditView):
     form = DirectPeeringSessionForm
     template = "peering/session/direct/add_edit.html"
 
-    def alter_object(self, obj, request, args, kwargs):
-        if "autonomous_system" in request.GET:
-            obj.autonomous_system = get_object_or_404(
-                AutonomousSystem, pk=request.GET.get("autonomous_system")
-            )
-
-        return obj
-
-    def get_return_url(self, obj):
-        return obj.autonomous_system.get_direct_peering_sessions_list_url()
-
 
 class DirectPeeringSessionBulkDelete(PermissionRequiredMixin, BulkDeleteView):
     permission_required = "peering.delete_directpeeringsession"
     model = DirectPeeringSession
     filter = DirectPeeringSessionFilterSet
     table = DirectPeeringSessionTable
+
+    def filter_by_extra_context(self, queryset, request, kwargs):
+        # If we are on an AutonomousSystem context, filter the session with
+        # the given ASN
+        if "asn" in request.POST:
+            asn = request.POST.get("asn")
+            autonomous_system = get_object_or_404(AutonomousSystem, asn=asn)
+            return queryset.filter(autonomous_system=autonomous_system)
+        # If we are on an Router context, filter the session with
+        # the given Router ID
+        if "router_id" in request.POST:
+            router_id = int(request.POST.get("router_id"))
+            router = get_object_or_404(Router, pk=router_id)
+            return queryset.filter(router=router)
+        return queryset
 
 
 class DirectPeeringSessionBulkEdit(PermissionRequiredMixin, BulkEditView):
@@ -486,9 +539,6 @@ class DirectPeeringSessionBulkEdit(PermissionRequiredMixin, BulkEditView):
 class DirectPeeringSessionDelete(PermissionRequiredMixin, DeleteView):
     permission_required = "peering.delete_directpeeringsession"
     model = DirectPeeringSession
-
-    def get_return_url(self, obj):
-        return obj.autonomous_system.get_direct_peering_sessions_list_url()
 
 
 class DirectPeeringSessionDetails(PermissionRequiredMixin, View):
@@ -509,7 +559,7 @@ class DirectPeeringSessionEdit(PermissionRequiredMixin, AddOrEditView):
 
 class DirectPeeringSessionList(PermissionRequiredMixin, ModelListView):
     permission_required = "peering.view_directpeeringsession"
-    queryset = DirectPeeringSession.objects.order_by("autonomous_system")
+    queryset = DirectPeeringSession.objects.order_by("autonomous_system", "ip_address")
     table = DirectPeeringSessionTable
     filter = DirectPeeringSessionFilterSet
     filter_form = DirectPeeringSessionFilterForm
@@ -518,7 +568,13 @@ class DirectPeeringSessionList(PermissionRequiredMixin, ModelListView):
 
 class InternetExchangeList(PermissionRequiredMixin, ModelListView):
     permission_required = "peering.view_internetexchange"
-    queryset = InternetExchange.objects.order_by("name")
+    queryset = (
+        InternetExchange.objects.annotate(
+            internetexchangepeeringsession_count=Count("internetexchangepeeringsession")
+        )
+        .prefetch_related("router")
+        .order_by("name", "slug")
+    )
     table = InternetExchangeTable
     filter = InternetExchangeFilterSet
     filter_form = InternetExchangeFilterForm
@@ -630,7 +686,6 @@ class InternetExchangePeeringSessions(PermissionRequiredMixin, ModelListView):
     filter_form = InternetExchangePeeringSessionFilterForm
     table = InternetExchangePeeringSessionTable
     template = "peering/ix/sessions.html"
-    hidden_columns = ["internet_exchange"]
     hidden_filters = ["internet_exchange__id"]
 
     def build_queryset(self, request, kwargs):
@@ -640,7 +695,9 @@ class InternetExchangePeeringSessions(PermissionRequiredMixin, ModelListView):
         # which we want to get the peering sessions.
         if "slug" in kwargs:
             internet_exchange = get_object_or_404(InternetExchange, slug=kwargs["slug"])
-            queryset = internet_exchange.internetexchangepeeringsession_set.order_by(
+            queryset = internet_exchange.internetexchangepeeringsession_set.prefetch_related(
+                "autonomous_system"
+            ).order_by(
                 "autonomous_system", "ip_address"
             )
 
@@ -648,32 +705,18 @@ class InternetExchangePeeringSessions(PermissionRequiredMixin, ModelListView):
 
     def extra_context(self, kwargs):
         extra_context = {}
-
         # Since we are in the context of an IX we need to keep the reference for it
         if "slug" in kwargs:
             extra_context.update(
                 {
                     "internet_exchange": get_object_or_404(
                         InternetExchange, slug=kwargs["slug"]
-                    )
+                    ),
+                    "internet_exchange_slug": kwargs["slug"],
                 }
             )
 
         return extra_context
-
-    def setup_table_columns(self, request, permissions, table, kwargs):
-        if "slug" in kwargs:
-            internet_exchange = get_object_or_404(InternetExchange, slug=kwargs["slug"])
-
-            if (
-                internet_exchange.check_bgp_session_states
-                and internet_exchange.router
-                and internet_exchange.router.can_napalm_get_bgp_neighbors_detail()
-            ):
-                if "session_state" in table.base_columns:
-                    table.columns.show("session_state")
-
-        super().setup_table_columns(request, permissions, table, kwargs)
 
 
 class InternetExchangePeers(PermissionRequiredMixin, ModelListView):
@@ -696,7 +739,6 @@ class InternetExchangePeers(PermissionRequiredMixin, ModelListView):
 
     def extra_context(self, kwargs):
         extra_context = {}
-
         # Since we are in the context of an IX we need to keep the reference for it
         # Keep track of its ID as well to be able to find the IX when adding sessions
         if "slug" in kwargs:
@@ -708,7 +750,9 @@ class InternetExchangePeers(PermissionRequiredMixin, ModelListView):
 
 class InternetExchangePeeringSessionList(PermissionRequiredMixin, ModelListView):
     permission_required = "peering.view_internetexchangepeeringsession"
-    queryset = InternetExchangePeeringSession.objects.order_by("autonomous_system")
+    queryset = InternetExchangePeeringSession.objects.order_by(
+        "autonomous_system", "ip_address"
+    )
     table = InternetExchangePeeringSessionTable
     filter = InternetExchangePeeringSessionFilterSet
     filter_form = InternetExchangePeeringSessionFilterForm
@@ -720,17 +764,6 @@ class InternetExchangePeeringSessionAdd(PermissionRequiredMixin, AddOrEditView):
     model = InternetExchangePeeringSession
     form = InternetExchangePeeringSessionForm
     template = "peering/session/internet_exchange/add_edit.html"
-
-    def alter_object(self, obj, request, args, kwargs):
-        if "internet_exchange" in request.GET:
-            obj.internet_exchange = get_object_or_404(
-                InternetExchange, pk=request.GET.get("internet_exchange")
-            )
-
-        return obj
-
-    def get_return_url(self, obj):
-        return obj.internet_exchange.get_peering_sessions_list_url()
 
 
 class InternetExchangePeeringSessionBulkEdit(PermissionRequiredMixin, BulkEditView):
@@ -768,9 +801,6 @@ class InternetExchangePeeringSessionEdit(PermissionRequiredMixin, AddOrEditView)
 class InternetExchangePeeringSessionDelete(PermissionRequiredMixin, DeleteView):
     permission_required = "peering.delete_internetexchangepeeringsession"
     model = InternetExchangePeeringSession
-
-    def get_return_url(self, obj):
-        return obj.internet_exchange.get_peering_sessions_list_url()
 
 
 class InternetExchangePeeringSessionAddFromPeeringDB(
@@ -833,12 +863,31 @@ class InternetExchangePeeringSessionBulkDelete(PermissionRequiredMixin, BulkDele
                 InternetExchange, slug=internet_exchange_slug
             )
             return queryset.filter(internet_exchange=internet_exchange)
+        # If we are on an AutonomousSystem context, filter the session with
+        # the given ASN
+        if "asn" in request.POST:
+            asn = request.POST.get("asn")
+            autonomous_system = get_object_or_404(AutonomousSystem, asn=asn)
+            return queryset.filter(autonomous_system=autonomous_system)
+        # If we are on a Router context, filter the session with
+        # the given Router ID
+        if "router_id" in request.POST:
+            router_id = int(request.POST.get("router_id"))
+            router = get_object_or_404(Router, pk=router_id)
+            return queryset.filter(internet_exchange__router=router)
         return queryset
 
 
 class RouterList(PermissionRequiredMixin, ModelListView):
     permission_required = "peering.view_router"
-    queryset = Router.objects.all()
+    queryset = (
+        Router.objects.annotate(
+            internetexchange_count=Count("internetexchange"),
+            directpeeringsession_count=Count("directpeeringsession"),
+        )
+        .prefetch_related("configuration_template")
+        .order_by("name")
+    )
     filter = RouterFilterSet
     filter_form = RouterFilterForm
     table = RouterTable
@@ -907,6 +956,65 @@ class RouterBulkDelete(PermissionRequiredMixin, BulkDeleteView):
     model = Router
     filter = RouterFilterSet
     table = RouterTable
+
+
+class RouterDirectPeeringSessions(PermissionRequiredMixin, ModelListView):
+    permission_required = "peering.view_router"
+    filter = DirectPeeringSessionFilterSet
+    filter_form = DirectPeeringSessionFilterForm
+    table = DirectPeeringSessionTable
+    template = "peering/router/direct_peering_sessions.html"
+
+    def build_queryset(self, request, kwargs):
+        queryset = None
+        # The queryset needs to be composed of DirectPeeringSession objects
+        # related to the AS we are looking at.
+        if "pk" in kwargs:
+            router = get_object_or_404(Router, pk=kwargs["pk"])
+            queryset = router.directpeeringsession_set.order_by(
+                "relationship", "ip_address"
+            )
+        return queryset
+
+    def extra_context(self, kwargs):
+        extra_context = {}
+        # Since we are in the context of a Router we need to keep the reference
+        # for it
+        if "pk" in kwargs:
+            router = get_object_or_404(Router, pk=kwargs["pk"])
+            extra_context.update({"router": router, "router_id": router.pk})
+        return extra_context
+
+
+class RouterInternetExchangesPeeringSessions(PermissionRequiredMixin, ModelListView):
+    permission_required = "peering.view_router"
+    filter = InternetExchangePeeringSessionFilterSet
+    filter_form = InternetExchangePeeringSessionFilterForm
+    table = InternetExchangePeeringSessionTable
+    template = "peering/router/internet_exchange_peering_sessions.html"
+    hidden_filters = ["router__id"]
+
+    def build_queryset(self, request, kwargs):
+        queryset = None
+        # The queryset needs to be composed of InternetExchangePeeringSession objects but they
+        # are linked to an AS. So first of all we need to retrieve the AS for
+        # which we want to get the peering sessions.
+        if "pk" in kwargs:
+            queryset = InternetExchangePeeringSession.objects.filter(
+                internet_exchange__router__id=kwargs["pk"]
+            ).order_by("internet_exchange", "ip_address")
+
+        return queryset
+
+    def extra_context(self, kwargs):
+        extra_context = {}
+        # Since we are in the context of a Router we need to keep the reference
+        # for it
+        if "pk" in kwargs:
+            router = get_object_or_404(Router, pk=kwargs["pk"])
+            extra_context.update({"router": router, "router_id": router.pk})
+
+        return extra_context
 
 
 class RoutingPolicyList(PermissionRequiredMixin, ModelListView):

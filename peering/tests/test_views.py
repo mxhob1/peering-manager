@@ -47,6 +47,7 @@ class AutonomousSystemTestCase(StandardTestCases.Views):
         cls.form_data = {
             "asn": 64504,
             "name": "Autonomous System 4",
+            "name_peeringdb_sync": False,
             "contact_email": "",
             "contact_name": "",
             "contact_phone": "",
@@ -275,6 +276,10 @@ class RouterTestCase(StandardTestCases.Views):
             "use_netbox": False,
             "comments": "",
             "tags": "",
+            "napalm_args": None,
+            "napalm_password": "",
+            "napalm_timeout": 30,
+            "napalm_username": "",
         }
         cls.bulk_edit_data = {"platform": PLATFORM_JUNOS, "comments": "New comments"}
 
