@@ -27,6 +27,14 @@ PEERINGDB_PASSWORD = os.environ['PEERINGDB_PASSWORD']
 NAPALM_USERNAME = os.environ['NAPALM_USERNAME']
 NAPALM_PASSWORD = os.environ['NAPALM_PASSWORD']
 
+EMAIL = {
+  'SERVER': os.environ['EMAIL_SERVER'],
+  'PORT': os.environ['EMAIL_PORT'],
+  'USERNAME': os.environ['EMAIL_USERNAME'],
+  'PASSWORD': os.environ['EMAIL_PASSWORD'],
+  'FROM': os.environ['EMAIL_FROM'],
+}
+
 LOGGING = {
     "version": 1,
     "formatters": {
