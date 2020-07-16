@@ -32,7 +32,7 @@ EMAIL = {
   'PORT': os.environ['EMAIL_PORT'],
   'USERNAME': os.environ['EMAIL_USERNAME'],
   'PASSWORD': os.environ['EMAIL_PASSWORD'],
-  'FROM': os.environ['EMAIL_FROM'],
+  'FROM_ADDRESS': os.environ['EMAIL_FROM_ADDRESS'],
 }
 
 LOGGING = {
