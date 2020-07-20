@@ -3,6 +3,7 @@ ARG FROM=python:3-alpine
 FROM ${FROM} as builder
 
 RUN apk add --no-cache \
+      git \
       gcc \
       make \
       musl-dev \
@@ -16,6 +17,7 @@ WORKDIR /install
 
 COPY requirements.txt /
 RUN pip install --prefix="/install" --no-cache-dir --no-warn-script-location -r /requirements.txt
+RUN git clone https://github.com/snar/bgpq3 && cd bgpq3 && ./configure && make && make install
 
 ## Main Stage
 ARG FROM
@@ -33,6 +35,7 @@ RUN apk add --no-cache \
 WORKDIR /opt/peering-manager
 ENV PYTHONUNBUFFERED 1
 
+COPY --from=builder /usr/local/bin/bgpq3 /usr/local/bin
 COPY --from=builder /install /usr/local
 COPY . /opt/peering-manager
 
